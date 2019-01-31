@@ -15,19 +15,23 @@ sealed trait Stream[+A] {
   @annotation.tailrec
   final def find(f: A => Boolean): Option[A] = this match {
     case Empty => None
-    case Cons(h, t) => if (f(h())) Some(h()) else t().find(f)
+    case Cons(h, t) =>
+      val a = h()
+      if (f(a)) Some(a)
+      else t().find(f)
   }
+
   def take(n: Int): Stream[A] = this match {
-    case Empty => Empty
-    case _ if n == 0 => Empty
-    case Cons(h, t) => Cons(h, () => t().take(n - 1))
+    case Cons(h, t) if n  > 1 =>
+      lazy val tt = t().take(n - 1)
+      Cons(h, () => tt)
+    case Cons(h, _) if n == 1 => Cons(h, () => Empty)
+    case _ => Empty
   }
 
   def drop(n: Int): Stream[A] = this match {
-    case Empty => Empty
-    case _ if n == 0 => this
-    case Cons(_, t) if n == 1 => t()
-    case Cons(_, t) => t().drop(n - 1)
+    case Cons(_, t) if n >= 1 => t().drop(n - 1)
+    case _                    => this
   }
 
   def takeWhile(p: A => Boolean): Stream[A] = this match {
@@ -38,6 +42,11 @@ sealed trait Stream[+A] {
         Cons(() => hh, () => t().takeWhile(p))
       else
         Empty
+  }
+
+  def dropWhile(p: A => Boolean): Stream[A] = this match {
+    case Cons(h, t) if p(h()) => t().dropWhile(p)
+    case _ => this
   }
 
   def forAll(p: A => Boolean): Boolean = this match {
@@ -95,6 +104,7 @@ object Stream {
     else cons(as.head, apply(as.tail: _*))
 
   val ones: Stream[Int] = Stream.cons(1, ones)
+
   def from(n: Int): Stream[Int] = cons(n, from(n + 1))
 
   def unfold[A, S](z: S)(f: S => Option[(A, S)]): Stream[A] =

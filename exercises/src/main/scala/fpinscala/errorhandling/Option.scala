@@ -74,16 +74,33 @@ object Option {
       b1 <- b
     } yield f(a1, b1)
 
-  def sequence[A](a: List[Option[A]]): Option[List[A]] = a.foldLeft(Option(List[A]())){
-    case (Some(lst), Some(v)) => Some(v :: lst)
-    case _ => None
-  }
+  def sequence[A](a: List[Option[A]]): Option[List[A]] =
+    a.foldLeft(Option(List[A]())){
+      case (Some(lst), Some(v)) => Some(v :: lst)
+      case _ => None
+    }
 
-  def traverse[A, B](a: List[A])(f: A => Option[B]): Option[List[B]] = a.foldLeft(Option(List[B]())){
+  def ff[A, B](f: A => Option[B]): PartialFunction[(Option[List[B]], A), Option[List[B]]] = {
     case (Some(lst), v) => f(v) match {
       case Some(vv) => Some(vv :: lst)
       case _ => None
     }
     case _ => None
   }
+  def traverse[A, B](a: List[A])(f: A => Option[B]): Option[List[B]] =
+    a.foldLeft(Option(List[B]()))//(ff(f).tupled)
+    {
+      case (Some(lst), v) => f(v) match {
+        case Some(vv) => Some(vv :: lst)
+        case _ => None
+      }
+      case _ => None
+    }
+
+  def traverse_[A, B](a: List[A])(f: A => Option[B]): Option[List[B]] =
+    sequence(a.map(f))
+
+  def sequence_[A](a: List[Option[A]]): Option[List[A]] =
+    traverse(a)(identity)
+
 }

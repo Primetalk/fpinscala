@@ -46,7 +46,7 @@ object Tree {
   // Write a function `map`, analogous to the method of the same name
   // on List, that modifies each element in a tree with a given
   // function.
-  def map[A, B](t: Tree[A])(f: A => B): Tree[B] = t match {
+  def map_[A, B](t: Tree[A])(f: A => B): Tree[B] = t match {
     case Leaf(a) => Leaf(f(a))
     case Branch(left, right) => Branch(map(left)(f), map(right)(f))
   }
