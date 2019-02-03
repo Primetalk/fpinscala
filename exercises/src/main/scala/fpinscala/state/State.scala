@@ -31,10 +31,7 @@ object RNG {
     }
 
   def flatMap0[A, B](s: Rand[A])(f: A => Rand[B]): Rand[B] =
-    rng => {
-      val (a, rng2) = s(rng)
-      f(a)(rng2)
-    }
+    s.andThen{ case (a, r) => f(a)(r) }
 
   def nonNegativeInt(rng: RNG): (Int, RNG) = rng.nextInt match {
     case r@(i, rng2) =>
@@ -76,8 +73,11 @@ object RNG {
   def map2[A,B,C](ra: Rand[A], rb: Rand[B])(f: (A, B) => C): Rand[C] =
     flatMap0(ra)(a => map(rb)(b => f(a,b)))
 
+  def map_[A,B](ra: Rand[A])(f: A => B): Rand[B] =
+    flatMap0(ra)(f.andThen(unit[B]))
+
   def sequence[A](fs: List[Rand[A]]): Rand[List[A]] =
-    fs.foldLeft(unit(List[A]()))((bs, f) => flatMap(bs)(b => map(f)(ff => ff :: b)))
+    fs.foldRight(unit(List[A]()))((f, bs) => flatMap(bs)(b => map(f)(ff => ff :: b)))
 
   def flatMap[A,B](f: Rand[A])(g: A => Rand[B]): Rand[B] = flatMap0(f)(g)
 }
@@ -100,6 +100,7 @@ case class State[S,+A](run: S => (A, S)) {
       val (b, s3) = f(a).run(s2)
       (b, s3)
     })
+
 }
 
 sealed trait Input
@@ -111,8 +112,35 @@ case class Machine(locked: Boolean, candies: Int, coins: Int)
 object State {
   type Rand[A] = State[RNG, A]
   def simulateMachine(inputs: List[Input]): State[Machine, (Int, Int)] = {
-    def step(i: Input): State[Machine, (Int, Int)] = i match {
-      case Coin =>
+    def step(i: Input): State[Machine, Int] = i match {
+      case Coin => State{ case Machine(_, candies, coins) =>
+        (0, Machine(locked = candies == 0, candies, coins + 1))
+      }
+      case Turn => State{
+        case Machine(false, candies, coins) if candies > 0 =>
+          (1, Machine(locked = true, candies - 1, coins))
+        case m =>
+          (0, m)
+      }
     }
+
+    val dispensed = traverse(inputs)(step).map(_.sum)
+    for {
+      _ <- dispensed
+      Machine(_, candies, coins) <- get
+    } yield (candies, coins)
   }
+
+//  def set[S,A](s: State[S, A]): State[S, S] = State(s => (s, s))
+  def unit[S, A](a: A): State[S, A] = State(s => (a, s))
+
+
+  def get[S]: State[S, S] =
+    State(s => (s, s))
+
+  def sequence[S, A](fs: List[State[S, A]]): State[S, List[A]] =
+    fs.reverse.foldLeft(unit[S, List[A]](List[A]()))((bs, f) => bs.flatMap(b => f.map(ff => ff :: b)))
+
+  def traverse[S, A, B](list: List[A])(f: A => State[S, B]): State[S, List[B]] =
+    sequence(list.map(f))
 }
