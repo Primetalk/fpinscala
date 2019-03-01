@@ -23,27 +23,41 @@ case class Prop(run: TestCases => State[RNG, Result])
 
 object Prop {
   type TestCases = Int
-  type Result = Option[(Int, String)]
+  sealed trait Result
+  case object Passed extends Result
+  case class Falsified(passCound: Int, message: String) extends Result
+//  type Result = Option[(Int, String)]
   def forAll[A](gen: Gen[A])(f: A => Boolean): Prop = Prop(
     testCases => State[RNG, Result]{rng =>
       def loop(cnt: Int, rng: RNG): (Result, RNG) =
         if(cnt == 0)
-          (None, rng)
+          (Passed, rng)
         else {
           val (a, rng2: RNG) = gen(rng)
           Try(f(a)) match {
             case scala.util.Success(true) =>
               loop(cnt - 1, rng2)
             case scala.util.Success(false) =>
-              (Some((testCases - cnt, "property is not true for " + a)), rng2)
+              (Falsified(testCases - cnt, "property is not true for " + a), rng2)
             case scala.util.Failure(exception) =>
-              (Some((testCases - cnt, "failed with exception: " + exception.getMessage + " on argument " + a)), rng2)
+              (Falsified(testCases - cnt, "failed with exception: " + exception.getMessage + " on argument " + a), rng2)
           }
 
         }
       loop(testCases, rng)
   }
   )
+
+  def run(p: Prop,
+          maxSize: Int = 100,
+          testCases: Int = 100,
+          rng: RNG = RNG.Simple(System.currentTimeMillis)): Unit =
+    p.run(testCases).run(rng)._1 match {
+      case Falsified(n, msg) =>
+        println(s"! Falsified after $n passed tests:\n $msg")
+      case Passed =>
+        println(s"+ OK, passed $testCases tests.")
+    }
 }
 
 object Gen {
@@ -71,18 +85,28 @@ object Gen {
     ((i / 4) % 2 == 1, rng2)
   })
 
-  def listOfN[A](n: Int, gen: Gen[A]): Gen[List[A]] = Gen(State{ rng =>
-    def loop(i: Int, rng: RNG, res: List[A]): (List[A], RNG) = {
-      if(i == 0)
-        (res, rng)
-      else {
-        val (v, rng2) = gen.sample.run(rng)
-        loop(i - 1, rng2, v :: res)
+  def listOfN[A](n: Int, gen: Gen[A]): Gen[List[A]] =
+    Gen(State{ rng =>
+      def loop(i: Int, rng: RNG, res: List[A]): (List[A], RNG) = {
+        if(i == 0)
+          (res, rng)
+        else {
+          val (v, rng2) = gen.sample.run(rng)
+          loop(i - 1, rng2, v :: res)
+        }
       }
-    }
 
-    loop(n, rng, Nil)
+      require(n >= 0, "Cannot generate list of negative length")
+      loop(n, rng, Nil)
   })
+
+  def listOf1N[A](n: Int, gen: Gen[A]): Gen[List[A]] = {
+    //    gen.flatMap(head => listOfN(n - 1, gen).map(head :: _))
+    for {
+      head <- gen
+      tail <- listOfN(math.max(0, n - 1), gen)
+    } yield head :: tail
+  }
 
   def listOfN[A](nGen: Gen[Int])(gen: Gen[A]): Gen[List[A]] =
     nGen
@@ -134,9 +158,11 @@ object Gen {
 }
 
 case class Gen[A](sample: State[RNG, A]) {
-  def map[B](f: A => B): Gen[B] = Gen(sample.map(f))
+  def map[B](f: A => B): Gen[B] =
+    Gen(sample.map(f))
 
-  def flatMap[B](f: A => Gen[B]): Gen[B] = Gen(sample.flatMap(f.andThen(_.sample)))
+  def flatMap[B](f: A => Gen[B]): Gen[B] =
+    Gen(sample.flatMap(f.andThen(_.sample)))
 
   def unsized: SGen[A] = SGen[A](_ => this)
 }
