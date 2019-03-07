@@ -19,21 +19,22 @@ shell, which you can fill in and modify while working through the chapter.
 //    override def check: Boolean = check && other.check
 //  }
 //}
-case class Prop(run: TestCases => State[RNG, Result])
+case class Prop(run: (MaxSize, TestCases) => State[RNG, Result])
 
 object Prop {
+  type MaxSize = Int
   type TestCases = Int
   sealed trait Result
   case object Passed extends Result
   case class Falsified(passCound: Int, message: String) extends Result
 //  type Result = Option[(Int, String)]
-  def forAll[A](gen: Gen[A])(f: A => Boolean): Prop = Prop(
-    testCases => State[RNG, Result]{rng =>
+  def forAll[A](sgen: SGen[A])(f: A => Boolean): Prop = Prop(
+    (maxSize: MaxSize, testCases: TestCases) => State[RNG, Result]{rng =>
       def loop(cnt: Int, rng: RNG): (Result, RNG) =
         if(cnt == 0)
           (Passed, rng)
         else {
-          val (a, rng2: RNG) = gen(rng)
+          val (a, rng2: RNG) = sgen.forSize(maxSize)(rng)
           Try(f(a)) match {
             case scala.util.Success(true) =>
               loop(cnt - 1, rng2)
@@ -48,10 +49,12 @@ object Prop {
   }
   )
 
-  def run(p: Prop,
-          maxSize: Int = 100,
-          testCases: Int = 100,
-          rng: RNG = RNG.Simple(System.currentTimeMillis)): Unit =
+  def run(
+    p: Prop,
+    maxSize: Int = 100,
+    testCases: Int = 100,
+    rng: RNG = RNG.Simple(System.currentTimeMillis)
+  ): Unit =
     p.run(testCases).run(rng)._1 match {
       case Falsified(n, msg) =>
         println(s"! Falsified after $n passed tests:\n $msg")
@@ -136,18 +139,19 @@ object Gen {
   }
 
   def memoize[A, B](f: A => B): A => B = {
-    val map = mutable.Map[A, B]()
+    val map = mutable.Map[A, B]()// todo concurrent hash map
 
     a => map.getOrElseUpdate(a, f(a))
   }
 
-  def fun[A, B](gen: Gen[B]): Gen[A => B] = {
+  def funBad[A, B](gen: Gen[B]): Gen[A => B] = {
     Gen(State[RNG, A => B] { rng =>
       val (seed, rng2) = rng.nextInt
       val random: AtomicReference[RNG] = new AtomicReference(RNG(seed.toLong)) // a new RNG for function values.
       val f = memoize[A, B] { _ =>
-        val (b, rng3: RNG) = gen.sample.run(random.get())
-        random.set(rng3)
+        val rng3 = random.get()
+        val (b, rng4: RNG) = gen.sample.run(rng3)
+        random.compareAndSet(rng3, rng4)
         b
       }
       (f, rng2) // we are returning the next random generator
@@ -155,6 +159,32 @@ object Gen {
       // it'll be another function.
     })
   }
+
+  /**
+    * Correct functional implementation of generator of arbitrary functions.
+    *
+    * It uses `Cogen` to rewind random number generator to a position that depends on both
+    * the initial RNG position and provided value `A`. Then this new RNG is used to generate `B`.
+    *
+    * It has the following properties:
+    * 1. For the same RNG state identical functions are generated.
+    * 2. All functions are robust and deterministic.
+    * 3. Different initial RNG positions yield different functions.
+    */
+  def fun[A, B](cogen: Cogen[A], gen: Gen[B]): Gen[A => B] = {
+    Gen(State[RNG, A => B] { rng =>
+      /** This function captures the state of rng and then reuse it
+        * on each call.
+        */
+      def f(a: A): B = {
+        val rng2 = cogen.rewind(a, rng)
+        val (b, _) = gen.sample.run(rng2)
+        b
+      }
+      (f, rng.nextInt._2)
+    })
+  }
+
 }
 
 case class Gen[A](sample: State[RNG, A]) {
@@ -168,14 +198,33 @@ case class Gen[A](sample: State[RNG, A]) {
 }
 
 case class SGen[+A](forSize: Int => Gen[A]) {
-  def map[B](f: A => B): SGen[B] = SGen(forSize andThen(_.map(f)))
+  def map[B](f: A => B): SGen[B] =
+    SGen(forSize andThen(_.map(f)))
+//    SGen(size => forSize(size).map(f))
 
   def flatMap[B](f: A => SGen[B]): SGen[B] =
     SGen(size => forSize(size).flatMap(f(_).forSize(size)))
+
+  def flatMapIncorrect[B](f: A => Gen[B]): SGen[B] =
+    SGen(forSize andThen(_.flatMap(f)))
+//    SGen(size => forSize(size).flatMap(f))
 
 }
 
 object SGen {
   def listOf[A](g: Gen[A]): SGen[List[A]] =
     SGen(size => Gen.listOfN(size, g))
+}
+
+/** Rewinds RNG to a new position using A. */
+case class Cogen[A](rewind: (A, RNG) => RNG) {
+  def contramap[B](f: B => A): Cogen[B] = Cogen{ (b, rng0) => rewind((f(b), rng0)) }
+}
+
+object Cogen {
+  def long: Cogen[Long] =
+    Cogen((l, rng) => RNG.apply(l ^ rng.nextLong._1))
+
+  def int: Cogen[Int] =
+    long.contramap(_.toLong)
 }
