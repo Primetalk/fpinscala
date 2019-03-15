@@ -108,6 +108,8 @@ case class State[S,+A](run: S => (A, S)) {
       (b, s3)
     })
 
+  def withFilter(p: A => Boolean): State[S, A] =
+    flatMap(a => if(p(a)) State.unit(a) else throw new IllegalStateException(s"$a failed the predicate p"))
 }
 
 sealed trait Input
@@ -131,10 +133,10 @@ object State {
       }
     }
 
-    val dispensed = traverse(inputs)(step).map(_.sum)
+    val dispensed: State[Machine, Int] = traverse(inputs)(step).map(_.sum)
     for {
       _ <- dispensed
-      Machine(_, candies, coins) <- get
+      Machine(_, candies, coins) <- get[Machine]
     } yield (candies, coins)
   }
 

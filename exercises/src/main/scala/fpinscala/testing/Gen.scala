@@ -57,7 +57,7 @@ object Prop {
         if(cnt == 0)
           (Passed, rng)
         else {
-          val (a, rng2: RNG) = sgen.forSize(maxSize)(rng)
+          val (a, rng2: RNG) = sgen.forSize(maxSize).sample.run(rng)
           Try(f(a)) match {
             case scala.util.Success(true) =>
               loop(cnt - 1, rng2)
@@ -78,7 +78,7 @@ object Prop {
     testCases: Int = 100,
     rng: RNG = RNG.Simple(System.currentTimeMillis)
   ): Unit =
-    p.run(testCases).run(rng)._1 match {
+    p.run(maxSize, testCases).run(rng)._1 match {
       case Falsified(n, msg) =>
         println(s"! Falsified after $n passed tests:\n $msg")
       case Passed =>
@@ -244,7 +244,8 @@ object SGen {
 
 /** Rewinds RNG to a new position using A. */
 case class Cogen[A](rewind: (A, RNG) => RNG) {
-  def contramap[B](f: B => A): Cogen[B] = Cogen{ (b, rng0) => rewind((f(b), rng0)) }
+  def contramap[B](f: B => A): Cogen[B] =
+    Cogen{ (b, rng0) => rewind(f(b), rng0) }
 }
 
 object Cogen {
