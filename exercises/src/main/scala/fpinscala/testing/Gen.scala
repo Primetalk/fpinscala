@@ -19,15 +19,38 @@ shell, which you can fill in and modify while working through the chapter.
 //    override def check: Boolean = check && other.check
 //  }
 //}
-case class Prop(run: (MaxSize, TestCases) => State[RNG, Result])
+case class Prop(run: (MaxSize, TestCases) => State[RNG, Result]) {
+  def &&(other: => Prop): Prop = Prop(
+    (maxSize: MaxSize, testCases: TestCases) =>
+      for {
+        r1 <- run(maxSize, testCases)
+        r2 <- other.run(maxSize, testCases)
+      } yield (r1, r2) match {
+        case (Passed, Passed) => Passed
+        case (Proved, Passed) => Passed
+        case (Passed, Proved) => Passed
+        case (Proved, Proved) => Proved
+        case (Falsified(cnt1, msg1), Falsified(cnt2, msg2)) =>
+          Falsified(cnt1 + cnt2, msg1 + msg2)
+        case (f@Falsified(cnt1, msg1), _) => f
+        case (_, f@Falsified(cnt1, msg1)) => f
+      }
+
+  )
+
+}
 
 object Prop {
   type MaxSize = Int
   type TestCases = Int
   sealed trait Result
+  case object Proved extends Result
   case object Passed extends Result
-  case class Falsified(passCound: Int, message: String) extends Result
+  case class Falsified(passCount: Int, message: String) extends Result
 //  type Result = Option[(Int, String)]
+  def forAll[A](gen: Gen[A])(f: A => Boolean): Prop =
+    forAll(gen.unsized)(f)
+
   def forAll[A](sgen: SGen[A])(f: A => Boolean): Prop = Prop(
     (maxSize: MaxSize, testCases: TestCases) => State[RNG, Result]{rng =>
       def loop(cnt: Int, rng: RNG): (Result, RNG) =
@@ -61,6 +84,9 @@ object Prop {
       case Passed =>
         println(s"+ OK, passed $testCases tests.")
     }
+
+  def prove(pred: => Boolean): Prop =
+    Prop((_, _) => if(pred) State.unit(Proved) else State.unit(Falsified(1, "property is false")))
 }
 
 object Gen {
