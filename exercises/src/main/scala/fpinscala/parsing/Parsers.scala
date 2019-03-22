@@ -4,7 +4,7 @@ import fpinscala.testing.{Gen, Prop}
 import Prop.forAll
 import language.{higherKinds, implicitConversions}
 
-trait Parsers[Err, Parser[+_]] { self => // so inner classes may call methods of trait
+trait Parsers[Parser[+_]] { self => // so inner classes may call methods of trait
 
 
   def or[A](s1: Parser[A], s2: => Parser[A]): Parser[A]
@@ -13,7 +13,7 @@ trait Parsers[Err, Parser[+_]] { self => // so inner classes may call methods of
 
   def unit[A](value: A): Parser[A] = succeed(value)
 
-  def failure(message: String): Parser[Nothing]
+  def fail(message: String): Parser[Nothing]
 
   implicit def string(s: String): Parser[String]
 
@@ -52,13 +52,20 @@ trait Parsers[Err, Parser[+_]] { self => // so inner classes may call methods of
 
     def *>[B](p2: Parser[B]): Parser[B] = flatMap(_ => p2)
 
-    def ~>[B](p2: Parser[B]): Parser[B] = flatMap(_ => p2)
+    def ~>[B](p2: Parser[B]): Parser[B] = //flatMap(_ => p2)
+      map2(p, p2)((_, b) => b)
 
     def <*[B](p2: Parser[B]): Parser[A] = flatMap(a => p2.map(_ => a))
 
     def <~[B](p2: Parser[B]): Parser[A] = flatMap(a => p2.map(_ => a))
 
     def product[B](p2: => Parser[B]): Parser[(A, B)] = self.product(p, p2)
+
+    def expected(message: => String): Parser[A] = self.expected(p)(message)
+    def scope(message: => String): Parser[A] = self.scope(p)(message)
+
+    def cut: Parser[A] = self.cut(p)
+    // def attempt?
   }
 
   object Laws {
@@ -107,7 +114,7 @@ trait Parsers[Err, Parser[+_]] { self => // so inner classes may call methods of
     case _ if n > 1 =>
       product(p, listOfN(n - 1, p))
         .map{ case (h,t) => h :: t }
-    case _ => self.failure(s"listOfN for negative n is undefined (n = $n)")
+    case _ => self.fail(s"listOfN for negative n is undefined (n = $n)")
   }
 
   def slice[A](p: Parser[A]): Parser[String]
@@ -115,6 +122,28 @@ trait Parsers[Err, Parser[+_]] { self => // so inner classes may call methods of
   type ParseResult[A] = Either[ParseError, A]
 
   def run[A](value: Parser[A])(string: String): ParseResult[A]
+
+  def expected[A](p: Parser[A])(message: => String): Parser[A] = label(p)(message)
+
+  def scope[A](p: Parser[A])(message: => String): Parser[A] = label(p)(message)
+
+  def label[A](p: Parser[A])(message: => String): Parser[A] = p
+
+  def cut[A](p: Parser[A]): Parser[A] = p
+
+  def parserExample1: Parser[(String, String)] = (("abra" <~ " ".many) ~ "cadabra").expected("parserExample1")
+
+  def checkParserExample1 =
+    run(parserExample1)("abra    cAdabra") == run(fail("Expected 'cadabra' but got 'cAdabra'"))("")
+
+   /* a or b
+    *
+    * When we parsed a lot inside a and only failed after, then we don't need to run `b`.
+    * So we need a way to "cut" backtracking to prevent selecting the other option.
+    * `cut` could be used somewhere in `a` when we know for sure that `b` cannot happen.
+    */
+  def location(e: ParseError): Location
+  def message(e: ParseError): String
 }
 
 case class Location(input: String, offset: Int = 0) {
