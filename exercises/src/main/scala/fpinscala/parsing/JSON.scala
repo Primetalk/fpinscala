@@ -35,16 +35,17 @@ object JSON {
   case class JArray(get: IndexedSeq[JSON]) extends JSON
   case class JObject(get: Map[String, JSON]) extends JSON
 
-  def jsonParser[Err,Parser[+_]](P: Parsers[Err,Parser]): Parser[JSON] = {
+  def jsonParser[Parser[+_]](P: Parsers[Parser]): Parser[JSON] = {
     import P._
     val whitespace: Parser[String] = (char(' ') | char('\n') | char('\r') | char('\t')).many.slice
     val quotedString: Parser[String] = char('"') ~> charPredicate(_ != '"').many.slice <~ char('"')
     val number: Parser[Double] = charPredicate("0123456789.".contains(_)).many.slice.map(_.toDouble)
+    val jnull: Parser[JNull.type] = string("null").as(JNull)
     val jnumber: Parser[JNumber] = number.map(JNumber)
     val jbool: Parser[JBool] = (string("true").as(true)  | string("false").as(false)).map(JBool)
     val jstring: Parser[JString] = quotedString.map(JString)
     def jsonValue: Parser[JSON] =
-      jbool | jnumber | jstring | jobject | jarray
+      jbool | jnumber | jstring | jobject | jarray | jnull
 
     def labelValuePair: Parser[(String,JSON)] = (quotedString <~ whitespace <~ ":" <~ whitespace) ~ jsonValue
 
