@@ -1,5 +1,6 @@
 val commonSettings = Seq(
-  scalaVersion := "2.12.1"
+  scalaVersion := "2.12.1",
+  libraryDependencies += "co.fs2" %% "fs2-core" % "1.0.4" 
 )
 
 lazy val root = (project in file("."))
