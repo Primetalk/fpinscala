@@ -1,6 +1,7 @@
 package fpinscala
 package monads
 
+import fpinscala.monoids.{Foldable, Monoid}
 import parsing._
 import testing._
 import parallelism._
@@ -27,6 +28,14 @@ object Functor {
   }
 }
 
+trait WithUnit[M[_]] {
+  def unit[A](a: => A): M[A]
+}
+
+trait WithZero[M[_]] {
+  def zero[A]: M[A]
+}
+
 trait Monad[M[_]] extends Functor[M] {
   def unit[A](a: => A): M[A]
   def flatMap[A,B](ma: M[A])(f: A => M[B]): M[B]
@@ -42,15 +51,56 @@ trait Monad[M[_]] extends Functor[M] {
     case h :: t => map2(h, sequence(t))((fh,tt) => fh :: tt)
   }
 
+  def sequence2[A](lma: List[M[A]]): M[List[A]] =
+     traverse(lma)(identity)
+
   def traverse[A,B](la: List[A])(f: A => M[B]): M[List[B]] =
     la.foldRight(unit(List[B]()))((a, fbs) => map2(f(a), fbs)(_ :: _))
 
+  def traverse2[A,B](la: List[A])(f: A => M[B]): M[List[B]] =
+    sequence(la.map(f))
 
   def replicateM[A](n: Int, ma: M[A]): M[List[A]] =
     if(n <= 0)
       unit(List())
     else
       flatMap(ma)(a => map(replicateM(n - 1, ma))(la => a :: la))
+
+  def filterM[A](ms: List[A])(f: A => M[Boolean]): M[List[A]] = {
+//    val lab: List[M[(A, Boolean)]] = ms.map(a => map(f(a))(flag => (a, flag)))
+//    val ml: M[List[(A, Boolean)]] = sequence(lab)
+//    map(ml)(list => list.filter(_._2).map(_._1))
+    val mloa: M[List[Option[A]]] =
+      traverse[A, Option[A]](ms){
+        a => flatMap(f(a))(flag => if(flag) unit(Option(a)) else unit(None))
+      }
+    map(mloa)(_.flatten)
+  }
+
+  def filterM2[A](ms: List[A])(f: A => M[Boolean]): M[List[A]] = ms match {
+    case Nil => unit(List.empty[A])
+    case a :: as => flatMap(f(a)) { flag =>
+      if (flag) map(filterM(as)(f)) { a :: _ }
+      else filterM(as)(f)
+    }
+  }
+
+  def traverseGen[A, B, L[_], R[_]](la: L[A])(f: A => M[R[B]])(implicit ML: Foldable[L], MLR: Monoid[R[B]]): M[R[B]] =
+    ML.foldRight(la)(unit(MLR.zero))((a: A, fbs: M[R[B]]) => map2(f(a), fbs)(MLR.op))
+
+//  def traverseGen2[A, B, L[_], R[_]](la: L[A])(f: A => M[R[B]])(implicit ML: Monad[L], MLR: Monoid[R[B]]): M[R[B]] = {
+//    val aa: L[M[R[B]]] = ML.map(la)(f)
+//    //((a: A, fbs: M[R[B]]) => map2(f(a), fbs)(MLR.op))
+//  }
+
+  def filterMGen[A, L[_]](ms: L[A])(f: A => M[Boolean])(implicit ML: Foldable[L], MR: Monad[L], MM: Monoid[L[A]]): M[L[A]] = {
+    traverseGen[A, A, L, L](ms){
+      a => flatMap(f(a))(flag => if(flag) unit(MR.unit(a)) else unit(MM.zero))
+    }
+  }
+
+//  def filterList[A](la: List[A])(f: A => M[Boolean]) =
+//    filterMGen[A, List, List](la)(f)(ListFoldable, Monoid.listMonoid, Monad.listMonad)
 
   def compose[A,B,C](f: A => M[B], g: B => M[C]): A => M[C] =
     a => flatMap(f(a))(g)
@@ -65,6 +115,9 @@ trait Monad[M[_]] extends Functor[M] {
   // Implement in terms of `join`:
   def __flatMap[A,B](ma: M[A])(f: A => M[B]): M[B] =
     join(map(ma)(f))
+
+
+
 }
 
 case class Reader[R, A](run: R => A)
